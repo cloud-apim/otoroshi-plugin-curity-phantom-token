@@ -72,14 +72,14 @@ class CurityPhantomTokenValidator extends NgAccessValidator {
     .maximumSize(5000)
     .build()
 
-  override def steps: Seq[NgStep]                = Seq(NgStep.MatchRoute, NgStep.ValidateAccess, NgStep.TransformRequest)
-  override def categories: Seq[NgPluginCategory] = Seq(NgPluginCategory.AccessControl, NgPluginCategory.Classic)
+  override def steps: Seq[NgStep]                = Seq(NgStep.ValidateAccess)
+  override def categories: Seq[NgPluginCategory] = Seq(NgPluginCategory.AccessControl)
   override def visibility: NgPluginVisibility    = NgPluginVisibility.NgUserLand
 
   override def multiInstance: Boolean                      = true
   override def core: Boolean                               = true
   override def isAccessAsync: Boolean                      = true
-  override def name: String                                = "Cloud APIM - Curity Phantom Token"
+  override def name: String                                = "Cloud APIM - Curity Phantom Token validator"
   override def description: Option[String]                 =
     "This plugin tries to validate curity phantom token against a curity idp server".some
   override def defaultConfigObject: Option[NgPluginConfig] = CurityPhantomTokenValidatorConfig.default.some
@@ -126,6 +126,11 @@ class CurityPhantomTokenValidator extends NgAccessValidator {
         maybeRoute = ctx.route.some
       )
       .map(r => NgAccess.NgDenied(r))
+  }
+
+  def start(env: Env): Future[Unit] = {
+    env.logger.info("[Cloud APIM] the 'Curity Phantom Token validator' plugin is available !")
+    ().vfuture
   }
 
   override def access(ctx: NgAccessContext)(implicit env: Env, ec: ExecutionContext): Future[NgAccess] = {
