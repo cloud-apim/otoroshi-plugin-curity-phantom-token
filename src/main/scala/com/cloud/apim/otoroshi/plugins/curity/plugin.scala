@@ -84,6 +84,34 @@ class CurityPhantomTokenValidator extends NgAccessValidator {
     "This plugin tries to validate curity phantom token against a curity idp server".some
   override def defaultConfigObject: Option[NgPluginConfig] = CurityPhantomTokenValidatorConfig.default.some
 
+  def noJsForm: Boolean = true
+
+  override def configFlow: Seq[String] = Seq(
+    "introspection_url",
+    "client_id",
+    "client_secret",
+    "ttl",
+  )
+
+  override def configSchema: Option[JsObject] = Some(Json.obj(
+    "introspection_url" -> Json.obj(
+      "type" -> "string",
+      "label" -> "Curity introspection url",
+    ),
+    "client_id" -> Json.obj(
+      "type" -> "string",
+      "label" -> "Curity client_id",
+    ),
+    "client_secret" -> Json.obj(
+      "type" -> "string",
+      "label" -> "Curity client_secret",
+    ),
+    "ttl" -> Json.obj(
+      "type" -> "number",
+      "label" -> "Token validation TTL",
+    )
+  ))
+
   def unauthorized(ctx: NgAccessContext)(implicit env: Env, ec: ExecutionContext): Future[NgAccess] = {
     Errors
       .craftResponseResult(
