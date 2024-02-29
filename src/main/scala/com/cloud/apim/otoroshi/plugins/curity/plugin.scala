@@ -73,7 +73,7 @@ class CurityPhantomTokenValidator extends NgAccessValidator {
     .build()
 
   override def steps: Seq[NgStep]                = Seq(NgStep.ValidateAccess)
-  override def categories: Seq[NgPluginCategory] = Seq(NgPluginCategory.AccessControl)
+  override def categories: Seq[NgPluginCategory] = Seq(NgPluginCategory.AccessControl, NgPluginCategory.Custom("Cloud APIM"))
   override def visibility: NgPluginVisibility    = NgPluginVisibility.NgUserLand
 
   override def multiInstance: Boolean                      = true
