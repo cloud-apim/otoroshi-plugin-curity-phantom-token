@@ -84,7 +84,7 @@ class CurityPhantomTokenValidator extends NgAccessValidator {
     "This plugin tries to validate curity phantom token against a curity idp server".some
   override def defaultConfigObject: Option[NgPluginConfig] = CurityPhantomTokenValidatorConfig.default.some
 
-  def noJsForm: Boolean = true
+  override def noJsForm: Boolean = true
 
   override def configFlow: Seq[String] = Seq(
     "introspection_url",
@@ -128,7 +128,7 @@ class CurityPhantomTokenValidator extends NgAccessValidator {
       .map(r => NgAccess.NgDenied(r))
   }
 
-  def start(env: Env): Future[Unit] = {
+  override def start(env: Env): Future[Unit] = {
     env.logger.info("[Cloud APIM] the 'Curity Phantom Token validator' plugin is available !")
     ().vfuture
   }
