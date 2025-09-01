@@ -10,7 +10,7 @@ lazy val root = (project in file("."))
     name := "otoroshi-plugin-curity-phantom-token",
     resolvers += "jitpack" at "https://jitpack.io",
     libraryDependencies ++= Seq(
-      "fr.maif" %% "otoroshi" % "17.3.0" % "provided",
+      "fr.maif" %% "otoroshi" % "17.5.0" % "provided",
       munit % Test
     )
   )
