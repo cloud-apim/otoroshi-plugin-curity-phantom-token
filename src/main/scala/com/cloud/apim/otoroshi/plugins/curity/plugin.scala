@@ -4,17 +4,26 @@ import com.github.blemale.scaffeine.{Cache, Scaffeine}
 import otoroshi.env.Env
 import otoroshi.gateway.Errors
 import otoroshi.models.{ApiKey, RouteIdentifier}
-import otoroshi.next.plugins.api._
+import otoroshi.next.plugins.api.*
 import otoroshi.utils.syntax.implicits.{BetterJsReadable, BetterJsValue, BetterSyntax}
-import play.api.libs.json._
+import play.api.libs.json.*
 import play.api.libs.typedmap.TypedKey
 import play.api.libs.ws.DefaultBodyWritables.writeableOf_urlEncodedSimpleForm
-import play.api.mvc.Results
+import play.api.mvc.{RequestHeader, Results}
 
 import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.concurrent.{ExecutionContext, Future, Promise}
 import scala.util.{Failure, Success, Try}
+
+private val BearerPrefix = "Bearer "
+
+extension (req: RequestHeader) {
+  private def phantomToken: Option[String] = req.headers
+    .get("Authorization")
+    .filter(_.startsWith(BearerPrefix))
+    .map(_.drop(BearerPrefix.length))
+}
 
 case class CurityPhantomTokenValidatorConfig(introspectionUrl: String, clientId: String, clientSecret: String, ttl: FiniteDuration) extends NgPluginConfig {
   def json: JsValue = CurityPhantomTokenValidatorConfig.format.writes(this)
@@ -27,7 +36,7 @@ object CurityPhantomTokenValidatorConfig {
     clientSecret = "secret",
     ttl = 10.minutes,
   )
-  val format = new Format[CurityPhantomTokenValidatorConfig] {
+  given format: Format[CurityPhantomTokenValidatorConfig] = new Format[CurityPhantomTokenValidatorConfig] {
     override def reads(json: JsValue): JsResult[CurityPhantomTokenValidatorConfig] = Try {
       CurityPhantomTokenValidatorConfig(
         introspectionUrl = json.select("introspection_url").asString,
@@ -48,12 +57,12 @@ object CurityPhantomTokenValidatorConfig {
   }
 }
 
-sealed trait CurityPhantomTokenState {}
-object CurityPhantomTokenState {
-  case class CurityPhantomTokenFetching(promise: Promise[NgAccess]) extends CurityPhantomTokenState
-  case class CurityPhantomTokenValid(content: JsValue) extends CurityPhantomTokenState
-  case class CurityPhantomTokenInvalid() extends CurityPhantomTokenState
+enum CurityPhantomTokenState {
+  case Fetching(promise: Promise[NgAccess])
+  case Valid(content: JsValue)
+  case Invalid
 }
+
 case class CurityPhantomTokenStateWrapper(ttl: FiniteDuration, state: CurityPhantomTokenState)
 
 
@@ -65,9 +74,9 @@ class CurityPhantomTokenValidator extends NgAccessValidator {
 
   private val tokenCache: Cache[String, CurityPhantomTokenStateWrapper] = Scaffeine()
     .expireAfter[String, CurityPhantomTokenStateWrapper](
-      create = (key, value) => value.ttl,
-      update =  (key, value, currentDuration) => value.ttl,
-      read = (key, value, currentDuration) => currentDuration
+      create = (_, value) => value.ttl,
+      update = (_, value, _) => value.ttl,
+      read = (_, _, currentDuration) => currentDuration
     )
     .maximumSize(5000)
     .build()
@@ -112,7 +121,7 @@ class CurityPhantomTokenValidator extends NgAccessValidator {
     )
   ))
 
-  def unauthorized(ctx: NgAccessContext)(implicit env: Env, ec: ExecutionContext): Future[NgAccess] = {
+  def unauthorized(ctx: NgAccessContext)(using env: Env, ec: ExecutionContext): Future[NgAccess] = {
     Errors
       .craftResponseResult(
         "unauthorized",
@@ -133,15 +142,15 @@ class CurityPhantomTokenValidator extends NgAccessValidator {
     ().vfuture
   }
 
-  override def access(ctx: NgAccessContext)(implicit env: Env, ec: ExecutionContext): Future[NgAccess] = {
+  override def access(ctx: NgAccessContext)(using env: Env, ec: ExecutionContext): Future[NgAccess] = {
     val config =
       ctx.cachedConfig(internalName)(CurityPhantomTokenValidatorConfig.format).getOrElse(CurityPhantomTokenValidatorConfig.default)
-    ctx.request.headers.get("Authorization") match {
-      case Some(value) if value.startsWith("Bearer ") => {
-        val token = value.substring(7)
+    ctx.request.phantomToken match {
+      case None => unauthorized(ctx)
+      case Some(token) => {
         tokenCache.getIfPresent(token) match {
-          case Some(CurityPhantomTokenStateWrapper(_, CurityPhantomTokenState.CurityPhantomTokenFetching(promise))) => promise.future
-          case Some(CurityPhantomTokenStateWrapper(_, CurityPhantomTokenState.CurityPhantomTokenValid(content))) => {
+          case Some(CurityPhantomTokenStateWrapper(_, CurityPhantomTokenState.Fetching(promise))) => promise.future
+          case Some(CurityPhantomTokenStateWrapper(_, CurityPhantomTokenState.Valid(content))) => {
             ctx.attrs.put(CurityPhantomTokenValidator.PhantomTokenKey -> content)
             val user = ApiKey(
               clientId = token,
@@ -153,10 +162,10 @@ class CurityPhantomTokenValidator extends NgAccessValidator {
             ctx.attrs.put(otoroshi.plugins.Keys.ApiKeyKey -> user)
             NgAccess.NgAllowed.vfuture
           }
-          case Some(CurityPhantomTokenStateWrapper(_, CurityPhantomTokenState.CurityPhantomTokenInvalid())) => unauthorized(ctx)
+          case Some(CurityPhantomTokenStateWrapper(_, CurityPhantomTokenState.Invalid)) => unauthorized(ctx)
           case None => {
             val promise = Promise[NgAccess]()
-            tokenCache.put(token, CurityPhantomTokenStateWrapper(config.ttl, CurityPhantomTokenState.CurityPhantomTokenFetching(promise)))
+            tokenCache.put(token, CurityPhantomTokenStateWrapper(config.ttl, CurityPhantomTokenState.Fetching(promise)))
             env.Ws
               .url(config.introspectionUrl)
               .withFollowRedirects(true)
@@ -168,14 +177,14 @@ class CurityPhantomTokenValidator extends NgAccessValidator {
                 "client_id" -> config.clientId,
                 "client_secret" -> config.clientSecret,
                 "token" -> token,
-              ))(writeableOf_urlEncodedSimpleForm)
+              ))(using writeableOf_urlEncodedSimpleForm)
               .flatMap { resp =>
                 if (resp.status == 200) {
-                  tokenCache.put(token, CurityPhantomTokenStateWrapper(config.ttl, CurityPhantomTokenState.CurityPhantomTokenValid(resp.json)))
+                  tokenCache.put(token, CurityPhantomTokenStateWrapper(config.ttl, CurityPhantomTokenState.Valid(resp.json)))
                   promise.trySuccess(NgAccess.NgAllowed)
                   NgAccess.NgAllowed.vfuture
                 } else {
-                  tokenCache.put(token, CurityPhantomTokenStateWrapper(config.ttl, CurityPhantomTokenState.CurityPhantomTokenInvalid()))
+                  tokenCache.put(token, CurityPhantomTokenStateWrapper(config.ttl, CurityPhantomTokenState.Invalid))
                   unauthorized(ctx).map { r =>
                     promise.trySuccess(r)
                     r
@@ -185,7 +194,6 @@ class CurityPhantomTokenValidator extends NgAccessValidator {
           }
         }
       }
-      case None => unauthorized(ctx)
     }
   }
 }
