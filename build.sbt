@@ -16,7 +16,7 @@ lazy val root = (project in file("."))
       "-Wconf:msg=package scala contains object and package with same name:s",
     ),
     libraryDependencies ++= Seq(
-      "fr.maif" %% "otoroshi" % "18.0.0" % "provided",
+      "fr.maif" %% "otoroshi" % "18.1.0" % "provided",
       munit % Test
     )
   )
